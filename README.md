@@ -87,7 +87,13 @@ nxdbg gdbstub <serial> hwbreak/hwclear <pid> <addr-hex>
 nxdbg gdbstub <serial> watch/unwatch <pid> <addr-hex> <length-hex> <write|read|access>
 nxdbg gdbstub <serial> backtrace <pid> [symbol-file] [max-frames]
 nxdbg gdbstub <serial> modules <pid>
+nxdbg gdbstub <serial> threads <pid>
 ```
+
+A stop reply prints why the target actually stopped, not just the bare
+signal/thread: a hardware or software breakpoint hit reports which kind it
+was, and a watchpoint hit reports the write/read/access kind plus the
+faulting address, in addition to the usual register dump.
 
 Attach, register read, memory read/write, software breakpoint set, hardware
 breakpoint set, and watchpoint set are all confirmed working live against a
