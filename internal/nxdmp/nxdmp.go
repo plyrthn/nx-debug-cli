@@ -184,7 +184,6 @@ type Thread struct {
 	IsExceptionThread bool
 	Status            ThreadStatus
 	Priority          int
-	IdealCore         int
 	Core              int
 	AffinityMask      uint64
 	IP                uint64
@@ -210,6 +209,19 @@ type ThreadLocalStorage struct {
 // LZ4-compressed or zlib-compressed), screenshots and video - a text
 // report only needs the structured chunks. The payload is left on disk;
 // ReadRawChunk fetches it on demand.
+//
+// Screenshot and video chunks (BMPIMAGE/RAWIMAGE/JPGIMAGE/PNGIMAGE,
+// MP4VIDEO/RAWVIDEO) carry no framing of their own beyond the outer
+// tag+size header - the body is exactly a standalone BMP/JPEG/PNG/MP4
+// file (or, for the "raw" variants, unlabelled pixel/frame data with no
+// width/height in the chunk itself), so there is nothing left to decode:
+// ReadRawChunk already returns bytes a normal image/video reader can open
+// directly. A memory chunk's body opens with a 24-byte address/type/size
+// header before the (possibly compressed) page data; that triple is
+// already surfaced structurally via MemoryRegion when the dump carries a
+// region-info chunk, so decoding it a second time out of a memory chunk
+// would be redundant, and decompressing the page bytes themselves would
+// only feed a hex/memory view, not the text report - nothing here needs it.
 type RawChunk struct {
 	Tag    string
 	Offset int64 // file offset of the payload, not the chunk header
@@ -296,7 +308,6 @@ type threadRaw struct {
 	CurrentThread bool
 	Status        ThreadStatus
 	Priority      int
-	IdealCore     int
 	Core          int
 	AffinityMask  uint64
 	IP, SP        uint64
@@ -524,7 +535,6 @@ func parse(f *os.File, path string) (*Dump, error) {
 			IsExceptionThread:  t.CurrentThread,
 			Status:             t.Status,
 			Priority:           t.Priority,
-			IdealCore:          t.IdealCore,
 			Core:               t.Core,
 			AffinityMask:       t.AffinityMask,
 			IP:                 t.IP,
@@ -632,13 +642,18 @@ func parseThread(body []byte) (threadRaw, error) {
 		ID:            binary.LittleEndian.Uint64(body[0:]),
 		CurrentThread: int16(binary.LittleEndian.Uint16(body[8:])) == 1,
 		Status:        threadStatusFromByte(body[10]),
-		Priority:      int(body[12]),
-		IdealCore:     int(body[13]),
-		Core:          int(body[14]),
-		AffinityMask:  uint64(body[15]),
-		IP:            binary.LittleEndian.Uint64(body[16:]),
-		SP:            binary.LittleEndian.Uint64(body[24:]),
-		Name:          cString(body[32:64]),
+		// Priority is a 16-bit field even though real priority values
+		// (0-63) never fill more than the low byte; read the full field
+		// rather than assuming the high byte is unused padding.
+		Priority: int(binary.LittleEndian.Uint16(body[12:])),
+		// Core is packed into a single 16-bit field: the low byte is the
+		// core index, the high byte is the affinity mask. There is no
+		// separate "ideal core" byte anywhere in this record.
+		Core:         int(body[14]),
+		AffinityMask: uint64(body[15]),
+		IP:           binary.LittleEndian.Uint64(body[16:]),
+		SP:           binary.LittleEndian.Uint64(body[24:]),
+		Name:         cString(body[32:64]),
 
 		GPRegisters:        readRegs(nGP),
 		GPControlRegisters: readRegs(nGPCtrl),

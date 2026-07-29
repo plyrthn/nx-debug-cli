@@ -74,7 +74,7 @@ func mmryinfBody(address uint64, typ MemoryType, size uint64) []byte {
 	return body
 }
 
-func threadBody(id uint64, current bool, status byte, priority, idealCore, core, affinity byte, ip, sp uint64, name string, gp, gpCtrl, fp, fpCtrl []uint64) []byte {
+func threadBody(id uint64, current bool, status byte, priority, core, affinity byte, ip, sp uint64, name string, gp, gpCtrl, fp, fpCtrl []uint64) []byte {
 	fixed := make([]byte, 96)
 	binary.LittleEndian.PutUint64(fixed[0:], id)
 	var cur uint16
@@ -83,8 +83,7 @@ func threadBody(id uint64, current bool, status byte, priority, idealCore, core,
 	}
 	binary.LittleEndian.PutUint16(fixed[8:], cur)
 	binary.LittleEndian.PutUint16(fixed[10:], uint16(status))
-	fixed[12] = priority
-	fixed[13] = idealCore
+	binary.LittleEndian.PutUint16(fixed[12:], uint16(priority))
 	fixed[14] = core
 	fixed[15] = affinity
 	binary.LittleEndian.PutUint64(fixed[16:], ip)
@@ -185,7 +184,7 @@ func TestParseFullSyntheticDump(t *testing.T) {
 	b.chunk("MMRYINF", mmryinfBody(0x2000, MemoryRead, 0x800))
 	b.chunk("MMRYINF", mmryinfBody(0x2800, MemoryReadWrite, 0x800))
 	b.chunk("MMRYINF", mmryinfBody(0x9000, MemoryReadWrite, 0x1000))
-	b.chunk("THRD", threadBody(42, true, 'R', 1, 0, 0, 1, 0x1500, 0x9500, "Main Thread",
+	b.chunk("THRD", threadBody(42, true, 'R', 1, 0, 1, 0x1500, 0x9500, "Main Thread",
 		gp, []uint64{0x60000000}, make([]uint64, 64), []uint64{0, 0}))
 	b.chunk("STCKFRMS", stackFramesBody(42, []uint64{0x1400, 0x1500}))
 	b.chunk("EXCPINF", exceptionBody(42, true, 6, 0x1600))
@@ -306,7 +305,7 @@ func TestReportSaysSoWhenADumpHasNoStackFrameChunk(t *testing.T) {
 	var b chunkBuilder
 	b.chunk("DUMP", headerBody(141, "NX", 6, "MarioKart8P", "1.0.0", 0, 0))
 	b.chunk("RDFS", rdfsBody(8, 8))
-	b.chunk("THRD", threadBody(0x2b2, true, 'R', 1, 0, 0, 1, 0x1500, 0x2875b208, "Main Thread",
+	b.chunk("THRD", threadBody(0x2b2, true, 'R', 1, 0, 1, 0x1500, 0x2875b208, "Main Thread",
 		gp, nil, nil, nil))
 
 	path := writeDump(t, &b)
@@ -338,7 +337,7 @@ func TestReportSaysSoWhenNoThreadIsMarkedAsTheExceptionThread(t *testing.T) {
 	var b chunkBuilder
 	b.chunk("DUMP", headerBody(141, "NX", 4, "MarioKart8P", "1.0.0", 0, 0))
 	b.chunk("RDFS", rdfsBody(8, 8))
-	b.chunk("THRD", threadBody(0x2b2, false, 'R', 1, 0, 0, 1, 0x1500, 0x9500, "Main Thread",
+	b.chunk("THRD", threadBody(0x2b2, false, 'R', 1, 0, 1, 0x1500, 0x9500, "Main Thread",
 		gp, nil, nil, nil))
 
 	path := writeDump(t, &b)
@@ -379,6 +378,29 @@ func TestParseRejectsATruncatedHeaderChunk(t *testing.T) {
 	path := writeDump(t, &b)
 	if _, err := Parse(path); err == nil {
 		t.Fatal("expected an error for a truncated DUMP chunk")
+	}
+}
+
+func TestParseThreadReadsThePackedPriorityCoreAffinityFields(t *testing.T) {
+	body := threadBody(7, false, 'R', 0x34, 0x21, 0x02, 0x1000, 0x2000, "Worker", nil, nil, nil, nil)
+	// threadBody's priority argument is a single byte; poke the next byte
+	// directly to exercise the full 16-bit field. A record where that
+	// byte is non-zero would previously have been (wrongly) exposed as a
+	// separate "ideal core" value rather than folded into Priority.
+	body[13] = 0x01
+
+	th, err := parseThread(body)
+	if err != nil {
+		t.Fatalf("parseThread: %v", err)
+	}
+	if want := 0x0134; th.Priority != want {
+		t.Errorf("Priority = %#x, want %#x (byte 13 belongs to the priority field)", th.Priority, want)
+	}
+	if th.Core != 0x21 {
+		t.Errorf("Core = %#x, want 0x21", th.Core)
+	}
+	if th.AffinityMask != 0x02 {
+		t.Errorf("AffinityMask = %#x, want 0x02", th.AffinityMask)
 	}
 }
 
