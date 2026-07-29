@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: nxdbg-windows-amd64
+            binary: nxdbg.exe
+          - os: ubuntu-latest
+            artifact: nxdbg-linux-amd64
+            binary: nxdbg
+          - os: macos-latest
+            artifact: nxdbg-macos-arm64
+            binary: nxdbg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: install build deps (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libusb-1.0-0-dev xorg-dev libasound2-dev libgl1-mesa-dev xvfb
+
+      - name: install libusb (macos)
+        if: runner.os == 'macOS'
+        run: brew install libusb pkg-config
+
+      - name: gofmt
+        shell: bash
+        run: |
+          fmt=$(gofmt -l .)
+          if [ -n "$fmt" ]; then
+            echo "gofmt needs to be run on:"
+            echo "$fmt"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            xvfb-run -a go test ./...
+          else
+            go test ./...
+          fi
+
+      - name: build
+        shell: bash
+        run: go build -o "${{ matrix.binary }}" ./cmd/nxdbg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+
+      # Windows arm64 is a plain cross-compile from the same free runner: the
+      # WinUSB backend is pure Go with no cgo, so no cross toolchain is
+      # needed. There's no equivalent free path for Linux/macOS arm64, since
+      # their usbdev backend goes through cgo (libusb).
+      - name: build windows/arm64
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        env:
+          GOOS: windows
+          GOARCH: arm64
+        run: go build -o nxdbg-arm64.exe ./cmd/nxdbg
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'windows-latest'
+        with:
+          name: nxdbg-windows-arm64
+          path: nxdbg-arm64.exe
