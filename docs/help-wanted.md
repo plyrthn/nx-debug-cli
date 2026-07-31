@@ -10,6 +10,36 @@ If you can help with any of this, opening an issue with what you tried and
 what you saw is the most useful thing - even a "tried it, same result" on an
 existing report narrows things down.
 
+## Tools for digging in
+
+Everything below is either already in this project or a standard, publicly
+available tool - none of it needs the official SDK or a daemon running.
+
+- `nxdbg gdbstub <serial> ...` is a one-shot scriptable client for the
+  target's GDB remote stub (attach, registers, memory, breakpoints,
+  watchpoints, backtrace) without needing a real debugger attached. Good for
+  poking at the step/continue hang below without a full gdb/lldb session in
+  the way.
+- `nxdbg gdb <serial>` holds the same stub open behind a local port instead,
+  for an actual debugger (gdb, LLDB, IDA, Ghidra, VS Code) to attach to.
+  Anything a real debugger can do through that port is fair game to try.
+- `nxdbg video record <serial> <seconds> out.h264` (and `dump`/`dump-audio`)
+  writes the raw stream to a file. Feeding a capture straight into
+  `ffmpeg`/`ffprobe`, bypassing this project's own decode path entirely, is
+  how the video bugs above were actually tracked down, and is the fastest
+  way to confirm or rule out a report independent of anything this
+  project's code might be doing.
+- `nxdbg dump read <file.nxdmp>` decodes a crash dump with no official
+  tooling installed, if a devkit produces one worth cross-checking.
+- Wireshark with its USBPcap capture driver (a standard Windows USB sniffer,
+  nothing specific to this project) can capture the raw USB traffic between
+  host and devkit, for anything that needs chasing below the level this
+  project's own code even sees.
+- `go test ./...` runs the existing test suite. A lot of what's pinned down
+  above (the parameter set bytes, the gamepad button mapping, the wire
+  formats) is covered by tests that read back what was written, so a
+  regression fails loudly instead of needing to be spotted by eye.
+
 ## Video
 
 `internal/videodecode` turns the target's raw H.264 stream into a live
