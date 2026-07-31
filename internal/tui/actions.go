@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -67,6 +69,7 @@ var actions = []Action{
 	{
 		Key:         "v",
 		Label:       "video window",
+		Busy:        "opening video window...",
 		NeedsTarget: true,
 		Command:     "video",
 		Run:         videoAction,
@@ -237,23 +240,53 @@ const gdbPanel = `The target's gdb stub is now forwarded to localhost:2159.
 Leave this running while you debug. Close it with "nxdbg gdb" in a terminal
 if you want to see its log.`
 
+// videoLaunchGrace is how long videoAction waits to see whether the re-exec'd
+// process survives its own startup. A window that actually opens never exits
+// on its own, so anything that dies inside this window is a failure worth
+// reporting - the caller otherwise gets a false "opened" message with no
+// evidence it was wrong, which is exactly what happened when the target
+// wasn't reachable yet: the child died in milliseconds and the "opened"
+// message went out anyway because nothing was watching for it.
+const videoLaunchGrace = 1 * time.Second
+
 // videoAction opens the interactive remote-screen window. It re-execs this
 // same binary rather than opening the window in-process: the window's event
 // loop wants the main thread on some platforms, which the TUI already owns.
 func videoAction(t htc.Target) tea.Cmd {
 	return func() tea.Msg {
-		self, err := os.Executable()
+		self, err := selfPath()
 		if err != nil {
 			return actionResultMsg{err: fmt.Errorf("locate own binary: %w", err)}
 		}
 		serial := targetSerial(t)
 		cmd := exec.Command(self, "video", serial)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
 		if err := cmd.Start(); err != nil {
 			return actionResultMsg{err: err}
 		}
-		// Nothing waits on it - the window belongs to the user now, and
-		// reaping it would mean blocking the UI until they close it.
-		go cmd.Wait()
+		// Nothing waits on it past the grace period below - once the window
+		// is up it belongs to the user now, and reaping it would mean
+		// blocking the UI until they close it.
+		exited := make(chan error, 1)
+		go func() { exited <- cmd.Wait() }()
+		return videoLaunchResult(serial, &stderr, exited, videoLaunchGrace)
+	}
+}
+
+// videoLaunchResult waits up to grace for the re-exec'd video process to die
+// on startup. Anything that dies inside that window is reported as a
+// failure, with whatever it printed to stderr, instead of the "opened"
+// message the caller would otherwise send with nothing to back it up.
+func videoLaunchResult(serial string, stderr *bytes.Buffer, exited <-chan error, grace time.Duration) tea.Msg {
+	select {
+	case <-exited:
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = "video window for " + serial + " exited immediately"
+		}
+		return actionResultMsg{err: errors.New(msg)}
+	case <-time.After(grace):
 		return actionResultMsg{text: "opened video window for " + serial}
 	}
 }

@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"bytes"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plyrthn/nx-debug-cli/internal/htc"
 )
@@ -76,6 +79,63 @@ func TestTargetSerial(t *testing.T) {
 				t.Errorf("targetSerial = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// A process that dies before the grace period is up never opened a window,
+// so it has to be reported as a failure, not the success text - this was the
+// original bug: the child could die instantly and the caller never found out.
+func TestVideoLaunchResultReportsAProcessThatDiesFast(t *testing.T) {
+	var stderr bytes.Buffer
+	stderr.WriteString("error: no session on 127.0.0.1:20184.\n  Start one with:  nxdbg serve\n")
+	exited := make(chan error, 1)
+	exited <- errors.New("exit status 1")
+
+	msg := videoLaunchResult("SERIAL", &stderr, exited, time.Second)
+	got, ok := msg.(actionResultMsg)
+	if !ok {
+		t.Fatalf("got %T, want actionResultMsg", msg)
+	}
+	if got.err == nil {
+		t.Fatal("a process that exited immediately was reported as success")
+	}
+	if !strings.Contains(got.err.Error(), "no session") {
+		t.Errorf("error %v does not carry what the process printed", got.err)
+	}
+}
+
+// A process that dies fast with nothing on stderr still has to say something
+// useful rather than an empty error.
+func TestVideoLaunchResultReportsAProcessThatDiesFastWithNoOutput(t *testing.T) {
+	exited := make(chan error, 1)
+	exited <- errors.New("exit status 1")
+
+	msg := videoLaunchResult("SERIAL", &bytes.Buffer{}, exited, time.Second)
+	got, ok := msg.(actionResultMsg)
+	if !ok {
+		t.Fatalf("got %T, want actionResultMsg", msg)
+	}
+	if got.err == nil || !strings.Contains(got.err.Error(), "SERIAL") {
+		t.Errorf("error %v does not name the target", got.err)
+	}
+}
+
+// A process still running once the grace period passes is the window having
+// opened successfully - that's the whole reason there's a grace period
+// instead of waiting for the process to end.
+func TestVideoLaunchResultReportsSuccessOnceGracePasses(t *testing.T) {
+	exited := make(chan error) // never fires
+
+	msg := videoLaunchResult("SERIAL", &bytes.Buffer{}, exited, 10*time.Millisecond)
+	got, ok := msg.(actionResultMsg)
+	if !ok {
+		t.Fatalf("got %T, want actionResultMsg", msg)
+	}
+	if got.err != nil {
+		t.Errorf("a still-running process was reported as a failure: %v", got.err)
+	}
+	if !strings.Contains(got.text, "SERIAL") {
+		t.Errorf("success message %q does not name the target", got.text)
 	}
 }
 
