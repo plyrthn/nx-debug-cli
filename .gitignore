@@ -1,0 +1,7 @@
+/bin/
+*.vsix
+*.dll
+*.pdb
+*.exe
+*.exe~
+/nxdbg
