@@ -42,10 +42,13 @@ available tool - none of it needs the official SDK or a daemon running.
 
 ## Video
 
-`internal/videodecode` turns the target's raw H.264 stream into a live
-picture by shelling out to `ffmpeg`, forced to emit frames even though the
-stream never contains a keyframe. Three real bugs were found and fixed this
-way:
+**The big one: the target never sends a real keyframe, at all.** In
+practice that means parts of the picture sit gray, and playback can skip
+and stutter instead of running smooth, worst right after the stream
+reconnects (which it does on its own roughly every 500ms). This is
+confirmed H.264 (see the README), just never carrying an actual reference
+frame - `internal/videodecode` shells out to `ffmpeg` and forces it to
+build a picture anyway. Three real bugs in that path were found and fixed:
 
 1. A decoder that had (incorrectly) flagged a real reference frame as seen
    stopped resyncing entirely and just drifted forever.
@@ -58,14 +61,17 @@ way:
    roughly 93% of real frames were silently dropped before ever reaching the
    screen.
 
-What's confirmed and measured after those fixes: real, continuous,
-scripted controller input (holding a stick direction through the same input
-path a physical controller drives) decodes at roughly 25 frames a second
-over a 20-second window, with real picture detail, not just gray. What
-hasn't been confirmed: an actual person playing with an actual controller
-in hand, and saying whether it feels good - stutters, input lag, and
-general "does this feel like a game" are judgment calls no amount of
-scripted measurement substitutes for.
+Those three took it from barely watchable to roughly 25 frames a second
+measured over a 20-second window of continuous, real controller input, with
+real picture detail, not just gray. That number is an average, not a
+steady rate - the delivery is bursty (below), so what it actually looks
+like in the moment is closer to "gray, then a burst of motion" than a
+constant 30fps. Whether that's fixable client-side or is just what this
+stream is, given it has no real keyframe to anchor to, is the open
+question. What hasn't been confirmed at all: an actual person playing with
+an actual controller in hand, and saying whether it feels good - stutters,
+input lag, and general "does this feel like a game" are judgment calls no
+amount of scripted measurement substitutes for.
 
 Two things are believed to be structural limits of this specific stream
 rather than bugs still to find, but more hardware would help confirm that:
@@ -83,6 +89,12 @@ rather than bugs still to find, but more hardware would help confirm that:
   pacing is a fundamental property of the stream or something environment-
   specific (a particular firmware version, a particular title, USB
   controller/host chipset) is genuinely unknown from a sample size of one.
+- **Whether the target ever sends a real keyframe under any condition is
+  still an open question**, not a settled "never." Every capture taken so
+  far reconnected to a stream that was already running (DevMenu or a game
+  already up); nobody has yet checked whether the very first client to
+  connect right after the target boots gets a real IDR that later
+  reconnects don't.
 
 If you try this: which title, what the picture actually looked like
 (screenshot or short recording helps a lot), and whether it held up during

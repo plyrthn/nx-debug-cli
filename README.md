@@ -36,8 +36,10 @@ way. Left click/drag sends touch, right click sends HOME, keyboard and any
 connected gamepad are forwarded to the target, and the target's audio plays
 back alongside it.
 
-See [`docs/help-wanted.md`](docs/help-wanted.md#video) for what's still
-rough about the decoded path and what would help nail it down.
+The target never sends a real keyframe on this stream, so `video` can show
+gray patches and skip/stutter instead of running smooth, worst right after
+a reconnect. See [`docs/help-wanted.md`](docs/help-wanted.md#video) for the
+detail on that and what would help nail it down.
 
 ## Installing and managing applications
 
@@ -291,13 +293,15 @@ This is a one-person project reverse-engineering a protocol against a single
 devkit, so some things here are only tested as far as that setup allows.
 Concrete ways to help, roughly in order of how much difference they'd make:
 
-- **Play something through `nxdbg video` with a real controller and say how
-  it actually feels.** The decode path has had three real bugs found and
-  fixed and is measured close to real-time during scripted movement, but
-  nobody has yet sat down with an Xbox controller and just played. If it's
-  smooth, that's worth knowing; if it isn't, the specific way it's bad
-  (stutters on turns, input feels delayed, breaks up during fast motion) is
-  worth far more than "it's not great."
+- **The video stream never gets a real keyframe, which shows up as gray
+  patches and skip/stutter instead of smooth playback**, worst right after
+  a reconnect (the target closes and rebinds its own socket roughly every
+  500ms on its own). Three real bugs in the decode path are already fixed,
+  taking it from barely watchable to roughly 25fps average under scripted
+  movement, but nobody has yet sat down with a real Xbox controller and
+  just played. If it's smooth, that's worth knowing; if it isn't, the
+  specific way it's bad (stutters on turns, input feels delayed, breaks up
+  during fast motion) is worth far more than "it's not great."
 - **A second devkit, especially on different firmware.** Several things here
   are pinned to one unit's observed behavior - the video stream's parameter
   sets, its `frame_num` cycling every 14 frames, the gdb stub's `step`/
