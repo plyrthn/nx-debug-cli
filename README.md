@@ -26,11 +26,18 @@ nxdbg video <serial>          # or bare `nxdbg video` with one target connected
 nxdbg shell <serial> watch    # same window, reached through the shell group
 ```
 
-Opens a window showing the target's screen, driven by repeated screenshots
-rather than the H.264 stream, so the picture never drifts or degrades over a
-long session. Left click/drag sends touch, right click sends HOME, keyboard
-and any connected gamepad are forwarded to the target, and the target's audio
-plays back alongside it.
+Opens a window showing the target's screen. `nxdbg video` decodes the raw
+H.264 stream when it can, since that is what actually keeps pace with the
+target; `nxdbg shell watch` is the same window driven by repeated
+screenshots instead, which never drifts but tops out around what the
+screenshot RPC itself can deliver. `video` falls back to the screenshot path
+automatically if `ffmpeg` isn't on PATH, so the window still opens either
+way. Left click/drag sends touch, right click sends HOME, keyboard and any
+connected gamepad are forwarded to the target, and the target's audio plays
+back alongside it.
+
+See [`docs/help-wanted.md`](docs/help-wanted.md#video) for what's still
+rough about the decoded path and what would help nail it down.
 
 ## Installing and managing applications
 
@@ -277,6 +284,36 @@ capture all built on the devkit's own USB protocol directly.
   image, and this project has no use for that capability.
 - Test new functionality against a devkit you can watch, one command at a
   time.
+
+## Help wanted
+
+This is a one-person project reverse-engineering a protocol against a single
+devkit, so some things here are only tested as far as that setup allows.
+Concrete ways to help, roughly in order of how much difference they'd make:
+
+- **Play something through `nxdbg video` with a real controller and say how
+  it actually feels.** The decode path has had three real bugs found and
+  fixed and is measured close to real-time during scripted movement, but
+  nobody has yet sat down with an Xbox controller and just played. If it's
+  smooth, that's worth knowing; if it isn't, the specific way it's bad
+  (stutters on turns, input feels delayed, breaks up during fast motion) is
+  worth far more than "it's not great."
+- **A second devkit, especially on different firmware.** Several things here
+  are pinned to one unit's observed behavior - the video stream's parameter
+  sets, its `frame_num` cycling every 14 frames, the gdb stub's `step`/
+  `continue` hang - and it's an open question how much of that is universal
+  versus specific to this hardware/firmware combination.
+- **Linux, on real hardware.** The libusb transport (`internal/usbdev`) is
+  structurally identical to the Windows and macOS paths and macOS is
+  hardware-confirmed, but Linux has only been build-tested, never run
+  against a real devkit.
+- **GDB stub `step`/`continue`.** Confirmed hanging against five different
+  processes in five different states on this hardware - see the main GDB
+  section above. Worth knowing if a different firmware version behaves
+  differently.
+
+Full detail on all of these, including what's already been ruled out, is in
+[`docs/help-wanted.md`](docs/help-wanted.md).
 
 ## Building
 
