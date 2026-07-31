@@ -382,21 +382,30 @@ func (m *MediaStream) Close() error { return m.conn.Close() }
 // expects.
 //
 // A single TCP connection is not the unit of a stream. The target closes the
-// connection on its own after a short run, tears down its listening socket,
-// and re-listens on a *different* port; the reference client handles this by
-// looping - connect, read until it drops, resolve the port again, reconnect.
-// A reader that treats the first EOF as the end of the stream sees a couple of
-// hundred milliseconds of video and concludes the protocol is broken.
+// connection on its own after a short run and re-listens; a reader that
+// treats the first EOF as the end of the stream sees a couple of hundred
+// milliseconds of video and concludes the protocol is broken. The host side
+// of this address is stable across that cycle (nxdbg serve holds one
+// listener open per port for the life of the session and queues the next
+// connection behind it, see htcs.Server.handleListen), so once an address is
+// known the fast path is just redialling it - no port map lookup involved.
+//
+// The port map only has to be consulted twice in the common case: to learn
+// the address the first time, and again if a dial to the known address ever
+// actually fails. Both go through a live subscription rather than a one-shot
+// resolve, because the one-shot resolve (PortMap) deliberately settles for
+// several hundred milliseconds before answering - fine for a human reading a
+// port list, too slow to pay on every cold start of a stream that wants to
+// track the target's next frame.
 type MediaSession struct {
 	ctx    context.Context
 	serial string
 	port   string
 
-	stream *MediaStream
-	// addr is the last address that worked. The target drops the connection
-	// about twice a second, so redialling is the common path, not the error
-	// path - going back through the control port each time would spend most
-	// of each window resolving an address that hasn't changed.
+	watcher *PortMapWatcher
+	stream  *MediaStream
+	// addr is the last address that worked. Cleared only when a dial to it
+	// actually fails, which is what triggers going back to the watcher.
 	addr string
 	// Reconnects counts how many times the target dropped us. It is worth
 	// surfacing: a session that reconnects every frame is working but is
@@ -405,9 +414,9 @@ type MediaSession struct {
 	closed     bool
 }
 
-// reconnectWindow bounds how long to keep trying to find the target's new
-// listener before giving up. The port reappears within a few milliseconds in
-// practice; this is slack for a host that is busy.
+// reconnectWindow bounds how long to keep trying to find the target's
+// listener before giving up. In practice this only matters for the initial
+// resolve; a known-good address redials in well under a second.
 const reconnectWindow = 10 * time.Second
 
 // DialVideoSession opens the video stream and keeps it open across reconnects.
@@ -423,8 +432,13 @@ func DialAudioSession(ctx context.Context, serial string) (*MediaSession, error)
 // DialMediaSession opens a named media port and keeps it open across the
 // target's reconnects.
 func DialMediaSession(ctx context.Context, serial, port string) (*MediaSession, error) {
-	s := &MediaSession{ctx: ctx, serial: serial, port: port}
+	w, err := WatchPortMap(ctx, ControlAddr())
+	if err != nil {
+		return nil, err
+	}
+	s := &MediaSession{ctx: ctx, serial: serial, port: port, watcher: w}
 	if err := s.connect(); err != nil {
+		w.Close()
 		return nil, err
 	}
 	return s, nil
@@ -436,18 +450,21 @@ func (s *MediaSession) connect() error {
 	for {
 		addr, err := s.addr, error(nil)
 		if addr == "" {
-			addr, err = resolvePortAddr(s.ctx, s.serial, s.port)
+			var entry PortMapEntry
+			entry, err = s.nextEntry(deadline)
+			if err == nil {
+				addr = entry.Addr()
+			}
 		}
 		if err == nil {
 			var stream *MediaStream
 			stream, err = DialMediaAddr(s.ctx, addr)
 			if err != nil {
-				// The cached address is the first thing to doubt. Drop it so
-				// the next attempt resolves properly rather than retrying a
-				// port the target has genuinely moved off.
+				// The address is only worth doubting once it has actually
+				// failed to dial - the host side of it does not move on its
+				// own, see the MediaSession doc comment.
 				s.addr = ""
-			}
-			if err == nil {
+			} else {
 				s.addr = addr
 				// Carry the context's deadline onto the socket. Without it a
 				// peer that accepts and then says nothing blocks forever:
@@ -463,10 +480,20 @@ func (s *MediaSession) connect() error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("htc: %s did not come back: %w", s.port, last)
 		}
-		select {
-		case <-s.ctx.Done():
-			return s.ctx.Err()
-		case <-time.After(25 * time.Millisecond):
+	}
+}
+
+// nextEntry blocks until the port map publishes an entry for this stream.
+func (s *MediaSession) nextEntry(deadline time.Time) (PortMapEntry, error) {
+	for {
+		wctx, cancel := context.WithDeadline(s.ctx, deadline)
+		snap, err := s.watcher.Next(wctx)
+		cancel()
+		if err != nil {
+			return PortMapEntry{}, err
+		}
+		if e, ok := snap.Find(s.serial, s.port); ok {
+			return e, nil
 		}
 	}
 }
@@ -494,6 +521,7 @@ func (s *MediaSession) Layout() string { return s.stream.Layout() }
 
 func (s *MediaSession) Close() error {
 	s.closed = true
+	s.watcher.Close()
 	return s.stream.Close()
 }
 

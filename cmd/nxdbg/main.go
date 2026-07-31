@@ -1301,7 +1301,7 @@ func cmdRemoteView(ctx context.Context, rest []string) error {
 		return err
 	}
 	defer s.Close()
-	return shellWatch(sigCtx, s, nil)
+	return runVideoWindow(sigCtx, s)
 }
 
 func cmdVideo(ctx context.Context, rest []string) error {
