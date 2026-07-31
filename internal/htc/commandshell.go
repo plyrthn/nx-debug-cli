@@ -366,6 +366,29 @@ func (s *CommandShell) ForegroundScreenshot(ctx context.Context) (image.Image, e
 	return s.screenshot(ctx, csTakeForegroundScreenShot)
 }
 
+// csResultNoScreenshotTarget is what the whole-screen Screenshot returns when
+// there's nothing running for it to composite. Hardware-confirmed: sitting at
+// DevMenu with no application launched hits this every time, even though
+// ForegroundScreenshot succeeds in that same state, since it reads DevMenu's
+// own rendering directly instead of going through the compositor.
+const csResultNoScreenshotTarget = 57550
+
+// BestScreenshot captures the whole screen, falling back to the
+// foreground-only capture when the target has nothing for the whole-screen
+// path to composite. Anything else the whole-screen path fails with is
+// returned as-is rather than papered over.
+func (s *CommandShell) BestScreenshot(ctx context.Context) (image.Image, error) {
+	img, err := s.Screenshot(ctx)
+	if err == nil {
+		return img, nil
+	}
+	var cerr *CsError
+	if !errors.As(err, &cerr) || cerr.Result != csResultNoScreenshotTarget {
+		return nil, err
+	}
+	return s.ForegroundScreenshot(ctx)
+}
+
 func (s *CommandShell) screenshot(ctx context.Context, cmd int32) (image.Image, error) {
 	r, err := s.call(ctx, cmd, nil)
 	if err != nil {

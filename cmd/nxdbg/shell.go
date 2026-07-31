@@ -313,15 +313,18 @@ func shellEvents(ctx context.Context, s *htc.CommandShell, rest []string) error 
 const shellWatchMaxFPS = 60
 
 // runScreenshotWindow drives the interactive window: it polls
-// CommandShell.Screenshot() in a loop rather than any video stream. The
+// CommandShell.BestScreenshot() in a loop rather than any video stream. The
 // target composites a fresh, complete framebuffer on every request, so
 // there is nothing to drift the way an H.264 stream would (see CLAUDE.md) -
 // and, discovered the hard way, a stream like that doesn't just drift, it
 // can fail to produce a picture at all for genuinely dynamic content like a
 // running game, since it never sends an IDR to anchor a decoder on.
+// BestScreenshot rather than plain Screenshot because sitting at DevMenu
+// with no application running is the normal case, not a fault, and the
+// whole-screen capture refuses in exactly that state.
 // extra is appended to the printed banner.
 func runScreenshotWindow(ctx context.Context, s *htc.CommandShell, windowTitle, extra string, input remoteview.Input) error {
-	first, err := s.Screenshot(ctx)
+	first, err := s.BestScreenshot(ctx)
 	if err != nil {
 		return fmt.Errorf("initial screenshot: %w", err)
 	}
@@ -329,7 +332,7 @@ func runScreenshotWindow(ctx context.Context, s *htc.CommandShell, windowTitle, 
 	width, height := b.Dx(), b.Dy()
 
 	next := func(ctx context.Context) ([]byte, error) {
-		img, err := s.Screenshot(ctx)
+		img, err := s.BestScreenshot(ctx)
 		if err != nil {
 			return nil, err
 		}

@@ -246,6 +246,54 @@ func TestScreenshotRejectsAShortBody(t *testing.T) {
 	}
 }
 
+// Sitting at DevMenu with nothing running is the normal state that makes the
+// whole-screen path refuse - BestScreenshot has to fall back rather than
+// leave the caller with an error a real screen is available to answer.
+func TestBestScreenshotFallsBackWhenNothingIsRunning(t *testing.T) {
+	s, fake := newTestShell(t)
+
+	go func() {
+		errBody := make([]byte, 4)
+		binary.LittleEndian.PutUint32(errBody, csResultNoScreenshotTarget)
+		cmd, _ := fake.answer(t, csRespError, errBody)
+		if cmd != csTakeScreenShot {
+			t.Errorf("first request was %d, want csTakeScreenShot", cmd)
+		}
+
+		body := make([]byte, 12+2*2*4)
+		binary.LittleEndian.PutUint32(body[4:], 2)
+		binary.LittleEndian.PutUint32(body[8:], 2)
+		cmd, _ = fake.answer(t, csRespScreenShot, body)
+		if cmd != csTakeForegroundScreenShot {
+			t.Errorf("fallback request was %d, want csTakeForegroundScreenShot", cmd)
+		}
+	}()
+
+	img, err := s.BestScreenshot(context.Background())
+	if err != nil {
+		t.Fatalf("BestScreenshot: %v", err)
+	}
+	if got, want := img.Bounds(), image.Rect(0, 0, 2, 2); got != want {
+		t.Errorf("bounds = %v, want %v", got, want)
+	}
+}
+
+// Any other failure is a real problem, not the "nothing is running" state,
+// so it has to reach the caller rather than being masked by a fallback.
+func TestBestScreenshotPropagatesOtherErrors(t *testing.T) {
+	s, fake := newTestShell(t)
+
+	errBody := make([]byte, 4)
+	binary.LittleEndian.PutUint32(errBody, 3600) // application not running
+	go fake.answer(t, csRespError, errBody)
+
+	_, err := s.BestScreenshot(context.Background())
+	var cerr *CsError
+	if !errors.As(err, &cerr) || cerr.Result != 3600 {
+		t.Fatalf("error = %v, want the original CsError(3600)", err)
+	}
+}
+
 func TestFirmwareFieldOffsets(t *testing.T) {
 	s, fake := newTestShell(t)
 
