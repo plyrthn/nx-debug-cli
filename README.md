@@ -4,14 +4,51 @@ An independent, open source client for the Nintendo Switch devkit's own
 on-target protocol - a library and CLI that drive the devkit's USB link
 directly, with no other software required.
 
-**Status: working, and validated against real hardware.** The htclow mux,
-HTCS, HTCMISC, HTCFS, the command shell, the video and audio streams, the gdb
-stub, the debug monitor, the target log, and `.nxdmp` crash dump reading have
-all been exercised against a real devkit.
+## Status
 
-Raw HID input (touch, tap, home, and gamepad buttons) drives the target's UI
-directly - `nxdbg input <serial> raw-tap`/`raw-pad`/etc. See
-`nxdbg input <serial> status`.
+Validated against real hardware, one devkit, one person - see
+[`docs/help-wanted.md`](docs/help-wanted.md) for what a second devkit or a
+second pair of hands would help confirm.
+
+**Works:**
+
+- The USB transport and htclow mux (WinUSB on Windows, libusb elsewhere -
+  Windows and macOS are hardware-confirmed, Linux builds and vets clean but
+  has never been run against real hardware)
+- HTCS, HTCMISC, HTCFS, including bulk transfer (NSP install, large file
+  read/write)
+- The command shell: screenshots, launch, terminate, reboot, app and
+  process queries
+- Raw HID input: touch, tap, HOME, gamepad buttons
+- The raw video/audio stream transport, including surviving the target
+  closing and rebinding its own socket roughly every 500ms
+- Audio playback
+- The gdb stub: attach, register read, memory read/write, software and
+  hardware breakpoint set, watchpoint set, backtrace, module/thread listing
+- The debug monitor (`nxdbg debug`), a second inspection path into an
+  already-attached process
+- Target log reading
+- `.nxdmp` crash dump reading
+
+**Doesn't, yet:**
+
+- The decoded video picture - the target never sends a real keyframe, so it
+  shows gray patches and can skip/stutter. See
+  [`docs/help-wanted.md#video`](docs/help-wanted.md#video).
+- gdb stub `step`/`continue` - advertised in the stub's own capabilities but
+  never actually resumes execution, hangs instead.
+- gdb stub register write (`setreg`) - refused live in the one case tested
+  (a crashed process's already-zeroed registers); untested on a healthy
+  thread.
+- Clearing a breakpoint or watchpoint in a separate CLI invocation after the
+  invocation that set it already detached - fails; set and clear need to
+  happen in one persistent session (`nxdbg gdb` plus a real debugger staying
+  attached throughout).
+- Linux on real hardware - the libusb transport is structurally identical to
+  the working macOS path but has only ever been build-tested.
+
+Raw HID input drives the target's UI directly - `nxdbg input <serial>
+raw-tap`/`raw-pad`/etc. See `nxdbg input <serial> status`.
 
 Run `nxdbg` with no arguments for a `bubbletea` TUI; run it with any
 subcommand for plain CLI/scripting output. Same binary either way, and the
