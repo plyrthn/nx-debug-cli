@@ -28,10 +28,11 @@ type H264Config struct {
 	Width  int
 	Height int
 
-	Log2MaxFrameNum  int // as used, not the coded minus-4 form
-	PicOrderCntType  int
-	MaxNumRefFrames  int
-	EntropyCodingCAB bool // CABAC when set, CAVLC when clear
+	Log2MaxFrameNum       int // as used, not the coded minus-4 form
+	PicOrderCntType       int
+	MaxNumRefFrames       int
+	GapsInFrameNumAllowed bool
+	EntropyCodingCAB      bool // CABAC when set, CAVLC when clear
 
 	// Colour description, written as the VUI's video_signal_type. The target
 	// tags its stream even though it carries no timing information.
@@ -54,6 +55,19 @@ type H264Config struct {
 // decoder has nothing to start from and will hold its output back until it
 // sees one. Pass `-flags2 +showall` to ffmpeg to get frames out anyway; they
 // build up as intra macroblocks arrive rather than snapping into place.
+//
+// GapsInFrameNumAllowed matters more than it looks: frame_num in a real
+// capture cycles 1-14 and starts over, not a steady +1 climb toward this
+// SPS's own 256-value modulus, so under the spec's own definition of a gap
+// (anything that isn't exactly +1) every wrap reads as one. Left at the
+// default false, a strict decoder treats each wrap as an error to recover
+// from, and it showed: ffmpeg was only flushing about 1 output picture per
+// 13 real ones (a real capture, decoded both ways to compare, went from 32
+// output frames to a clean 420 - every single input NAL - once this was set
+// true), which is where nearly all of this stream's perceived frame rate
+// problem actually was. True tells the decoder the wrap is fine, which,
+// given real hardware confirms it happens on every single reference frame,
+// is what the encoder's actual behavior calls for.
 var NXVideoConfig = H264Config{
 	ProfileIDC:              100,
 	ConstraintFlags:         0x0c,
@@ -63,6 +77,7 @@ var NXVideoConfig = H264Config{
 	Log2MaxFrameNum:         8,
 	PicOrderCntType:         2,
 	MaxNumRefFrames:         1,
+	GapsInFrameNumAllowed:   true,
 	EntropyCodingCAB:        true,
 	VideoFormat:             5, // unspecified
 	ColourPrimaries:         1, // BT.709
@@ -123,7 +138,7 @@ func (c H264Config) SPS() []byte {
 		w.ue(0)
 	}
 	w.ue(uint(c.MaxNumRefFrames))
-	w.u(0, 1) // gaps_in_frame_num_value_allowed_flag
+	w.u(boolBit(c.GapsInFrameNumAllowed), 1)
 
 	w.ue(uint(c.Width/16 - 1))
 	w.ue(uint(c.Height/16 - 1))
@@ -172,7 +187,11 @@ func (c H264Config) PPS() []byte {
 	w.se(0)   // pic_init_qs_minus26
 	w.se(0)   // chroma_qp_index_offset
 	w.u(boolBit(c.DeblockingFilterControl), 1)
-	w.u(0, 1) // constrained_intra_pred_flag
+	// constrained_intra_pred_flag: confirmed 0 against a real gameplay
+	// capture - forcing this to 1 makes ffmpeg reject intra macroblocks
+	// with "block unavailable for requested intra mode", which the real
+	// stream never triggers at 0.
+	w.u(0, 1)
 	w.u(0, 1) // redundant_pic_cnt_present_flag
 
 	// The 8x8 transform belongs to the high profiles and its presence is

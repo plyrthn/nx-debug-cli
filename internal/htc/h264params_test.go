@@ -92,7 +92,9 @@ func TestSPSReadsBackAsWritten(t *testing.T) {
 	if got := int(r.ue()); got != NXVideoConfig.MaxNumRefFrames {
 		t.Errorf("max_num_ref_frames = %d, want %d", got, NXVideoConfig.MaxNumRefFrames)
 	}
-	r.u(1) // gaps_in_frame_num_value_allowed_flag
+	if got := r.u(1) == 1; got != NXVideoConfig.GapsInFrameNumAllowed {
+		t.Errorf("gaps_in_frame_num_value_allowed_flag = %v, want %v", got, NXVideoConfig.GapsInFrameNumAllowed)
+	}
 	if got := (int(r.ue()) + 1) * 16; got != NXVideoConfig.Width {
 		t.Errorf("width = %d, want %d", got, NXVideoConfig.Width)
 	}
@@ -187,7 +189,7 @@ func TestParameterSetsMatchTheTargetEncoder(t *testing.T) {
 		got  []byte
 		want string
 	}{
-		{"SPS", NXVideoConfig.SPS(), "67640c20ac2b402802dd35010d01e080"},
+		{"SPS", NXVideoConfig.SPS(), "67640c20ac2b502802dd35010d01e080"},
 		{"PPS", NXVideoConfig.PPS(), "68ee3cb0"},
 	}
 	for _, c := range cases {

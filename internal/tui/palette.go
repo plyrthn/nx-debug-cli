@@ -275,9 +275,13 @@ func runCommand(c commands.Command, target string, extra []string) tea.Cmd {
 			// Nothing waits on it: it belongs to the user now.
 			go cmd.Wait()
 			line := "nxdbg " + strings.Join(argv, " ")
+			body := "  " + line + "\n\n" + "Its output is not shown here. Run the same line in a terminal\nto watch it."
+			if c.Interactive {
+				body += "\n\nOnce its window has focus, keyboard and any connected\ngamepad are forwarded live to the target."
+			}
 			return panelMsg{
 				title: "started in the background",
-				body:  "  " + line + "\n\n" + "Its output is not shown here. Run the same line in a terminal\nto watch it.",
+				body:  body,
 			}
 		}
 

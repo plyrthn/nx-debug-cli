@@ -86,6 +86,11 @@ type Command struct {
 	// Destructive marks a command that changes target state in a way worth
 	// confirming before running it from a menu.
 	Destructive bool
+	// Interactive marks a command that opens a window forwarding keyboard
+	// and gamepad input to the target live. The TUI mentions this in the
+	// panel it shows after starting one, since that window's own banner
+	// saying so goes to a discarded stdout when launched this way.
+	Interactive bool
 }
 
 // Path is how the command is typed, without the binary name.
@@ -159,7 +164,7 @@ func (c Command) Usage() string {
 // catalog is the list. Order within a group is the order it is shown in.
 var catalog = []Command{
 	// Everyday, top level.
-	{Name: "video", Summary: "interactive window: live screen, mouse, keyboard and gamepad", Target: OptionalSerialTarget, Needs: NeedsSession, Long: true, Everyday: true},
+	{Name: "video", Summary: "interactive window: live screen, mouse, keyboard and gamepad", Target: OptionalSerialTarget, Needs: NeedsSession, Long: true, Everyday: true, Interactive: true},
 	{Name: "serve", Args: "[-v|-t] [--root DIR] [--read-only]", Summary: "run the whole session, driving the devkit's USB link directly", Needs: NeedsDevice, Long: true, Everyday: true},
 	{Name: "gdb", Args: "[--port N]", Summary: "forward the target's gdb stub to a local port", Target: SerialTarget, Needs: NeedsSession, Long: true, Everyday: true},
 	{Name: "usb", Args: "[paths|reset]", Summary: "inspect or reset the devkit's USB interface", Needs: NeedsDevice},
@@ -185,7 +190,7 @@ var catalog = []Command{
 	{Group: "shell", Name: "shutdown", Summary: "power the target off", Target: SerialTarget, Needs: NeedsSession, Destructive: true},
 	{Group: "shell", Name: "events", Args: "[seconds]", Summary: "watch program launches and exits", Target: SerialTarget, Needs: NeedsSession, Long: true},
 	{Group: "shell", Name: "devmenu", Args: "<command...>", Summary: "run one of the target's DevMenu commands", Target: SerialTarget, Needs: NeedsSession},
-	{Group: "shell", Name: "watch", Summary: "interactive window fed by repeated screenshots, no drift", Target: SerialTarget, Needs: NeedsSession, Long: true, Everyday: true},
+	{Group: "shell", Name: "watch", Summary: "interactive window fed by repeated screenshots, no drift", Target: SerialTarget, Needs: NeedsSession, Long: true, Everyday: true, Interactive: true},
 
 	// debug: the target's debug monitor. Only answers once a process is
 	// actually attached to - see the group summary.

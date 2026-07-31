@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -19,6 +20,7 @@ import (
 	"github.com/plyrthn/nx-debug-cli/internal/htc"
 	"github.com/plyrthn/nx-debug-cli/internal/remoteaudio"
 	"github.com/plyrthn/nx-debug-cli/internal/remoteview"
+	"github.com/plyrthn/nx-debug-cli/internal/videodecode"
 )
 
 // The command shell is the target's own control service. Everything here works
@@ -338,8 +340,13 @@ func runScreenshotWindow(ctx context.Context, s *htc.CommandShell, windowTitle, 
 		}
 		return imageToRGB24(img), nil
 	}
+	return runInteractiveWindow(ctx, s.Serial, windowTitle, extra, width, height, next, input)
+}
 
-	fmt.Printf("%s (%dx%d)%s\n", s.Serial, width, height, extra)
+// runInteractiveWindow prints the window banner and blocks in the window
+// itself, whatever the picture source turns out to be.
+func runInteractiveWindow(ctx context.Context, serial, windowTitle, extra string, width, height int, next remoteview.FrameFunc, input remoteview.Input) error {
+	fmt.Printf("%s (%dx%d)%s\n", serial, width, height, extra)
 	fmt.Println("  left click/drag  touch      right click  HOME      Esc  quit")
 	fmt.Println("  keyboard and any connected gamepad are forwarded to the target")
 	return remoteview.Run(ctx, remoteview.Options{
@@ -350,8 +357,10 @@ func runScreenshotWindow(ctx context.Context, s *htc.CommandShell, windowTitle, 
 	}, next, input)
 }
 
-// shellWatch drives the interactive window: input and audio both resolve
-// straight over HTCS, the same way the screenshots do.
+// shellWatch drives the interactive window off repeated screenshots: no
+// codec, no drift, an exact copy of the target's screen every frame. Input
+// and audio both resolve straight over HTCS, the same way the screenshots
+// do.
 func shellWatch(ctx context.Context, s *htc.CommandShell, _ []string) error {
 	input := &lazyInput{serial: s.Serial, ctx: ctx}
 	defer input.Close()
@@ -363,6 +372,118 @@ func shellWatch(ctx context.Context, s *htc.CommandShell, _ []string) error {
 
 	return runScreenshotWindow(ctx, s, fmt.Sprintf("nxdbg - %s", s.Serial),
 		fmt.Sprintf(", fresh screenshot each frame, never drifts, audio: %s", audioDesc), input)
+}
+
+// runVideoWindow drives `nxdbg video`'s window. It decodes the target's raw
+// H.264 stream when it can, since that is what actually keeps pace with the
+// target (nxdbg video dump sustains close to 30fps once MediaSession
+// reconnects promptly - see CLAUDE.md), and falls back to shellWatch's
+// screenshot picture (a couple of frames a second on this hardware) if
+// decoding can't be started at all, so the window still opens either way.
+func runVideoWindow(ctx context.Context, s *htc.CommandShell) error {
+	input := &lazyInput{serial: s.Serial, ctx: ctx}
+	defer input.Close()
+
+	stopAudio, audioDesc := startAudioDaemonFree(ctx, s.Serial)
+	if stopAudio != nil {
+		defer stopAudio()
+	}
+
+	windowTitle := fmt.Sprintf("nxdbg - %s", s.Serial)
+	next, width, height, stopVideo, videoDesc := startVideoDecodeDaemonFree(ctx, s.Serial)
+	if next == nil {
+		return runScreenshotWindow(ctx, s, windowTitle,
+			fmt.Sprintf(", %s, audio: %s", videoDesc, audioDesc), input)
+	}
+	defer stopVideo()
+
+	return runInteractiveWindow(ctx, s.Serial, windowTitle,
+		fmt.Sprintf(", %s, audio: %s", videoDesc, audioDesc), width, height, next, input)
+}
+
+// startVideoDecodeDaemonFree turns on real H.264 decode for the video
+// window: it dials the raw stream directly (no daemon) and feeds it through
+// ffmpeg, forced to emit frames despite the target never sending a keyframe
+// - see internal/videodecode and NXVideoConfig in internal/htc for why. A
+// nil FrameFunc and a message explaining why is returned rather than an
+// error - decoding is what makes the window fast, not what makes it work at
+// all, so a machine without ffmpeg on PATH still gets a working window via
+// the screenshot fallback instead of nothing.
+func startVideoDecodeDaemonFree(ctx context.Context, serial string) (next remoteview.FrameFunc, width, height int, stop func(), desc string) {
+	session, err := htc.DialVideoSession(ctx, serial)
+	if err != nil {
+		return nil, 0, 0, nil, fmt.Sprintf("H.264 decode unavailable (%v), falling back to screenshots", err)
+	}
+
+	// Seeding this from a screenshot was tried and reverted: a screenshot
+	// encoded fresh via libx264 carries libx264's own SPS/PPS (its own
+	// reference-frame count, its own picture-order-count scheme), not this
+	// stream's - see NXVideoConfig's doc for why the real one is exactly
+	// this and nothing else. Once that foreign parameter set is in effect,
+	// every real slice from the target after it decodes as garbage
+	// ("reference count overflow", confirmed against a live capture). The
+	// target's own slices only ever parse cleanly against NXVideoConfig's
+	// own parameter sets, so that is what every decoder has to start from.
+	cfg := htc.NXVideoConfig
+	seed := cfg.ParameterSets()
+
+	dec, err := videodecode.StartSession(ctx, cfg.Width, cfg.Height, videodecode.StaticParams(seed))
+	if err != nil {
+		session.Close()
+		return nil, 0, 0, nil, fmt.Sprintf("H.264 decode unavailable (%v), falling back to screenshots", err)
+	}
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-dec.Events():
+				if !ok {
+					return
+				}
+				log.Printf("video decode: %s", msg)
+			}
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			f, err := session.NextFrame()
+			if err != nil {
+				// The raw stream is gone for good (MediaSession already
+				// retries every ordinary reconnect internally, so reaching
+				// here means that gave up too). Nothing after this point
+				// ever writes to dec again, so its picture freezes on
+				// whatever it last decoded - log it so a frozen window has
+				// an actual reason attached instead of going silent.
+				log.Printf("video decode: raw stream ended (%v), picture will stop updating", err)
+				return
+			}
+			if f.Kind != htc.VideoDataFrame || len(f.Payload) == 0 {
+				continue
+			}
+			// A write failing here is expected whenever it lands in the
+			// brief window where Session is mid-resync (the old decoder's
+			// stdin just closed, the new one isn't wired in yet) - that
+			// payload is lost, which is fine at ~30 payloads/sec, but the
+			// raw stream itself (session.NextFrame above) is still alive
+			// and has to keep being drained regardless, or the target's
+			// own reconnect cycle backs up behind it. Only NextFrame
+			// failing means the stream itself is actually gone.
+			dec.Write(f.Payload)
+		}
+	}()
+
+	stop = func() {
+		session.Close()
+		<-done
+		dec.Close()
+	}
+
+	return dec.Frame, cfg.Width, cfg.Height, stop, "decoded H.264 video, live"
 }
 
 // daemonFreeAudioFormat is what the target's audio stream actually carries,
